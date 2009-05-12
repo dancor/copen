@@ -5,10 +5,8 @@ license-file:    LICENSE
 author:          dan corson <danl@alum.mit.edu>
 synopsis:        <syn>
 build-type:      Simple
-build-depends:   base, haskell98
-
-exposed-modules: Data.copen
-hs-source-dirs:  src
+build-depends:   base, haskell98, pgn, binary, nano-md5, parsec >= 3,
+                 containers, derive, PomTree, FUtil, array, mtl, bytestring
 
 executable:      copen
 main-is:         Main.hs
