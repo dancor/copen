@@ -5,8 +5,9 @@ license-file:    LICENSE
 author:          dan corson <danl@alum.mit.edu>
 synopsis:        <syn>
 build-type:      Simple
-build-depends:   base, haskell98, pgn, binary, nano-md5, parsec >= 3,
-                 containers, derive, PomTree, FUtil, array, mtl, bytestring
+build-depends:   FUtil, HDBC, HDBC-postgresql, PomTree, array, base, binary,
+                 bytestring, containers, derive, haskell98, mtl, nano-md5,
+                 parsec, parsec>=3, pgn
 
 executable:      copen
 main-is:         Main.hs
