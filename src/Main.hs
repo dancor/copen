@@ -13,6 +13,8 @@ import Data.PGN
 import Data.SAN
 import Database.HDBC
 import Database.HDBC.PostgreSQL
+import FUtil
+import System.Console.GetOpt
 import System.Environment
 import System.IO
 import Text.Parsec
@@ -20,12 +22,28 @@ import Text.Parsec
 import qualified Data.ByteString.Lazy.Internal as BS
 import qualified Data.Map as M
 
+data Options = Options {
+  optImport :: Bool
+}
+
 $(derive makeBinary ''Board)
 $(derive makeBinary ''Color)
 $(derive makeBinary ''BdSq)
 $(derive makeBinary ''Move)
 $(derive makeBinary ''Result)
 
+defOpts :: Options
+defOpts = Options {
+  optImport = False
+}
+
+options :: [OptDescr (Options -> Options)]
+options = [
+  Option "i" ["import"] (NoArg (\ o -> o {optImport = True}))
+    "Import .PGN files into copen's database."
+  ]
+
+onFiles :: [[Char]] -> ([Char] -> String -> IO a) -> IO ()
 onFiles files f = mapM_
   (\ file -> f file =<< if file == "-" then getContents else readFile file)
   files
@@ -55,9 +73,6 @@ processGame conn filename gameNum pgn = do
 processGames :: Connection -> String -> [(Int, PGN)] -> IO ()
 processGames conn filename = mapM_ (uncurry $ processGame conn filename)
 
-dbConn :: IO Connection
-dbConn = handleSqlError $ connectPostgreSQL "dbname=copen"
-
 -- games_game_number_seq
 recordGame :: Connection -> String -> Int -> Result -> IO Int
 recordGame conn filename gameNum result = do
@@ -75,25 +90,32 @@ recordPosMove conn gameId ply move board = do
     [toSql $ encode board, toSql $ encode move, toSql gameId, toSql ply]
   commit conn
 
+getPosMoves :: Connection -> Board -> IO [Move]
+getPosMoves conn board = do
+  ret <- withTransaction conn $ \ conn -> quickQuery conn
+    "SELECT move, game_number, ply FROM copen WHERE position = ?"
+    [toSql $ encode board]
+  return $ map (decode . fromSql . head) ret
+
+withConn :: (Connection -> IO a) -> IO ()
+withConn f = do
+  conn <- handleSqlError $ connectPostgreSQL "dbname=copen"
+  f conn
+  disconnect conn
+
 main :: IO ()
 main = do
-  args <- getArgs
-  print args
-  conn <- dbConn
   let cClean = unlines . removeLineHeaders . lines
-  onFiles args $ \ filename c -> do
-    putStrLn $ "processing " ++ show filename
-    case runParser (many1 pgnParser <* eof) () filename $ cClean c of
-      Left err -> error $ show err
-      Right pgns -> processGames conn filename $ zip [1..] pgns
-    putStrLn $ "finished " ++ show filename
-  disconnect conn
-  return ()
-
---
-
-  {-
-  tree <- decodeFile "openingTree.bin" :: IO PosHashToInfo
-  print $ map (second length) $ M.toList $ fromJust $ M.lookup (encode bdInit) tree
-  --print $ length $ M.toList (tree :: PosHashToInfo)
-  -}
+  (opts, args) <- doArgs "usage" defOpts options
+  args <- getArgs
+  withConn $ \ conn -> if optImport opts
+    then
+      onFiles args $ \ filename c -> do
+        putStrLn $ "processing " ++ show filename
+        case runParser (many1 pgnParser <* eof) () filename $ cClean c of
+          Left err -> error $ show err
+          Right pgns -> processGames conn filename $ zip [1..] pgns
+        putStrLn $ "finished " ++ show filename
+    else do
+      mvs <- getPosMoves conn bdInit
+      print $ length mvs
