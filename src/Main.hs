@@ -4,27 +4,33 @@ import Chess
 import Control.Applicative hiding (many, (<|>))
 import Control.Arrow
 import Control.Monad
+import Control.Monad.Trans
 import Data.Binary
+import Data.Char
 import Data.DeriveTH
 import Data.Either
 import Data.List
 import Data.Maybe
 import Data.PGN
 import Data.SAN
-import Database.HDBC
-import Database.HDBC.PostgreSQL
+import Database.PostgreSQL.Enumerator
 import FUtil
 import System.Console.GetOpt
 import System.Environment
 import System.IO
 import Text.Parsec
--- wtf?  binary needs this?
-import qualified Data.ByteString.Lazy.Internal as BS
+import qualified Data.ByteString.Lazy as BS
+-- why does binary need this?
+import qualified Data.ByteString.Lazy.Internal as BSI
 import qualified Data.Map as M
 
 data Options = Options {
   optImport :: Bool
 }
+
+instance Applicative (DBM mark sess) where
+  pure = return
+  (<*>) = ap
 
 $(derive makeBinary ''Board)
 $(derive makeBinary ''Color)
@@ -43,9 +49,9 @@ options = [
     "Import .PGN files into copen's database."
   ]
 
-onFiles :: [[Char]] -> ([Char] -> String -> IO a) -> IO ()
+onFiles :: (MonadIO m) => [[Char]] -> ([Char] -> String -> m a) -> m ()
 onFiles files f = mapM_
-  (\ file -> f file =<< if file == "-" then getContents else readFile file)
+  (\ file -> f file =<< io (if file == "-" then getContents else readFile file))
   files
 
 -- this is a hack for This Week in Chess's .pgn files
@@ -61,61 +67,53 @@ gameBoards = gameBoardsBd bdInit where
   gameBoardsBd bd (mv:mvs) = (mv', bd) : gameBoardsBd (bdDoMv mv' bd) mvs where
     Right mv' = resolveMv bd mv
 
-processGame :: Connection -> String -> Int -> PGN -> IO ()
-processGame conn filename gameNum pgn = do
+importGame filename gameNum pgn = do
   let
     moves = map fst $ pgnMoves pgn
   unless (null moves) $ do
-    gameId <- recordGame conn filename gameNum $ pgnResult pgn
-    mapM_ (\ (ply, (mv, bd)) -> recordPosMove conn gameId ply mv bd) .
-      zip [1..] $ gameBoards moves
+    gameId <- recordGame filename gameNum $ pgnResult pgn
+    mapM_ (\ (ply, (mv, bd)) -> recordPosMove gameId ply mv bd) .
+      zip [1 :: Int ..] $ gameBoards moves
 
-processGames :: Connection -> String -> [(Int, PGN)] -> IO ()
-processGames conn filename = mapM_ (uncurry $ processGame conn filename)
+importGames filename = mapM_ (uncurry $ importGame filename)
 
--- games_game_number_seq
-recordGame :: Connection -> String -> Int -> Result -> IO Int
-recordGame conn filename gameNum result = do
-  ret <- withTransaction conn $ \ conn -> quickQuery conn
-    "INSERT INTO games (file, number_in_file, result) VALUES (?, ?, ?) \
-    \RETURNING game_number"
-    [toSql filename, toSql gameNum, toSql $ fromEnum result]
-  commit conn
-  return . fromSql . head $ head ret
+oneIntIteratee :: (Monad m) => Int -> IterAct m Int
+oneIntIteratee = const . return . Left
 
-recordPosMove :: Connection -> Int -> Int -> Move -> Board -> IO ()
-recordPosMove conn gameId ply move board = do
-  withTransaction conn $ \ conn -> run conn
-    "INSERT INTO copen (position, move, game_number, ply) VALUES (?, ?, ?, ?)"
-    [toSql $ encode board, toSql $ encode move, toSql gameId, toSql ply]
-  commit conn
+recordGame filename gameNum result = doQuery (sqlbind
+  "INSERT INTO games (file, number_in_file, result) VALUES (?, ?, ?) \
+  \RETURNING game_number"
+  [bindP filename, bindP gameNum, bindP $ fromEnum result])
+  oneIntIteratee undefined
+  <* commit
 
-getPosMoves :: Connection -> Board -> IO [Move]
-getPosMoves conn board = do
-  ret <- withTransaction conn $ \ conn -> quickQuery conn
-    "SELECT move, game_number, ply FROM copen WHERE position = ?"
-    [toSql $ encode board]
-  return $ map (decode . fromSql . head) ret
+recordPosMove gameId ply move board = execDML (cmdbind
+  "INSERT INTO copen (position, move, game_number, ply) VALUES (?, ?, ?, ?)"
+  [bindP . BS.unpack $ encode board, bindP . BS.unpack $ encode move,
+   bindP gameId, bindP ply])
+  <* commit
 
-withConn :: (Connection -> IO a) -> IO ()
-withConn f = do
-  conn <- handleSqlError $ connectPostgreSQL "dbname=copen"
-  f conn
-  disconnect conn
+getPosMovesIteratee :: (Monad m) => BSI.ByteString -> Int -> Int ->
+  IterAct m [Move]
+getPosMovesIteratee a _ _ accum = result' $ ((decode a):accum)
+
+getPosMoves board = doQuery (sqlbind
+  "SELECT move, game_number, ply FROM copen WHERE position = ?"
+  [bindP . BS.unpack $ encode board])
+  getPosMovesIteratee []
 
 main :: IO ()
 main = do
   let cClean = unlines . removeLineHeaders . lines
   (opts, args) <- doArgs "usage" defOpts options
-  args <- getArgs
-  withConn $ \ conn -> if optImport opts
+  withSession (connect [CAdbname "copen"]) $ if optImport opts
     then
       onFiles args $ \ filename c -> do
-        putStrLn $ "processing " ++ show filename
+        io . putStrLn $ "processing " ++ show filename
         case runParser (many1 pgnParser <* eof) () filename $ cClean c of
           Left err -> error $ show err
-          Right pgns -> processGames conn filename $ zip [1..] pgns
-        putStrLn $ "finished " ++ show filename
+          Right pgns -> importGames filename $ zip [1 :: Int ..] pgns
+        io . putStrLn $ "finished " ++ show filename
     else do
-      mvs <- getPosMoves conn bdInit
-      print $ length mvs
+      mvs <- getPosMoves bdInit
+      io . print $ length mvs

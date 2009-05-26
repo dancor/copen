@@ -1,4 +1,4 @@
 echo 'DROP DATABASE copen;' | psql template1
 echo 'CREATE DATABASE copen;' | psql template1
-echo 'CREATE TABLE games (game_number SERIAL PRIMARY KEY, file BYTEA, number_in_file INT, result INT);' | psql copen
+echo 'CREATE TABLE games (game_number SERIAL PRIMARY KEY, file TEXT, number_in_file INT, result INT);' | psql copen
 echo 'CREATE TABLE copen (position BYTEA, move BYTEA, game_number INT REFERENCES games, ply INT) ;' | psql copen
