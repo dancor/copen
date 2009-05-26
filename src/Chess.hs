@@ -9,7 +9,7 @@ import Data.List
 import Data.Maybe
 import Data.SAN
 import FUtil
-import Text.Parsec
+import Text.Parsec (runParser)
 import qualified Data.Map as M
 import qualified Data.PomTree as Pom
 import qualified Data.Set as S
@@ -129,9 +129,33 @@ resolveMv bd mv0 = let
       then mv0
       else foldr tryXY (fillP mv0) . assocs $ bdGrid bd
 
-isPawn :: BdSq -> Bool
-isPawn (HasP _ 'P') = True
-isPawn _ = False
+unresolveMv :: Board -> Move -> Move
+unresolveMv bd mv = case mv of
+  Castle _ -> mv
+  _ -> if mvPiece mv == Just 'P' then mv' {mvPiece = Nothing} else mv' where
+    mv' = fromMaybe mv $
+      tryMv (mv {mvFromX = Nothing, mvFromY = Nothing}) <|>
+      tryMv (mv {mvFromY = Nothing}) <|>
+      tryMv (mv {mvFromX = Nothing})
+    tryMv mv = either (const Nothing) (const $ Just mv) $ resolveMv bd mv
+
+mvStr :: Move -> String
+mvStr (Castle 'K') = "O-O"
+mvStr (Castle 'Q') = "O-O-O"
+mvStr mv = concat [
+  maybe "" (:[]) ((\ x -> if x == Just 'P' then Nothing else x) $ mvPiece mv),
+  maybe "" xStr $ mvFromX mv,
+  maybe "" yStr $ mvFromY mv,
+  xStr $ mvToX mv,
+  yStr $ mvToY mv,
+  maybe "" (('=':) . (:[])) $ mvPromote mv]
+  where
+  xStr i = [chr $ i + ord 'a' - 1]
+  yStr = show
+
+bdSqIsPawn :: BdSq -> Bool
+bdSqIsPawn (HasP _ 'P') = True
+bdSqIsPawn _ = False
 
 bdDoMv :: Move -> Board -> Board
 bdDoMv mv bd = case mv of
@@ -143,7 +167,7 @@ bdDoMv mv bd = case mv of
         ]
       -- todo: doesn't check lastPawn2..
       considerEnPassant changes = if
-        isPawn (grid ! (y1, x1)) && grid ! (y2, x2) == Emp && x1 /= x2
+        bdSqIsPawn (grid ! (y1, x1)) && grid ! (y2, x2) == Emp && x1 /= x2
         then ((y1, x2), Emp):changes else changes
       considerPromotion changes = case mvPromote mv of
         Nothing -> changes

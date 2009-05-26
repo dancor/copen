@@ -93,12 +93,13 @@ recordPosMove gameId ply move board = execDML (cmdbind
    bindP gameId, bindP ply])
   <* commit
 
-getPosMovesIteratee :: (Monad m) => BSI.ByteString -> Int -> Int ->
-  IterAct m [Move]
-getPosMovesIteratee a _ _ accum = result' $ ((decode a):accum)
+getPosMovesIteratee :: (Monad m) => [Word8] -> Int ->
+  IterAct m [(Move, Result)]
+getPosMovesIteratee a b accum =
+  result' $ ((decode $ BS.pack a, toEnum b):accum)
 
 getPosMoves board = doQuery (sqlbind
-  "SELECT move, game_number, ply FROM copen WHERE position = ?"
+  "SELECT copen.move, games.result FROM copen, games WHERE copen.game_number = games.game_number AND copen.position = ?"
   [bindP . BS.unpack $ encode board])
   getPosMovesIteratee []
 
@@ -116,4 +117,15 @@ main = do
         io . putStrLn $ "finished " ++ show filename
     else do
       mvs <- getPosMoves bdInit
-      io . print $ length mvs
+      let
+        mvsInfo :: M.Map Move (M.Map Result Int)
+        mvsInfo = M.fromListWith (M.unionWith (+)) $
+          map (second (flip M.singleton 1)) mvs
+        sumAndPercents :: M.Map Result Int -> (Int, [Double])
+        sumAndPercents rs = (rSum, percents) where
+          rSum = sum rsl
+          percents = map (\ r -> fromIntegral r / fromIntegral rSum) rsl
+          rsl = map snd $ M.toList rs
+        res = reverse . sort . map swap . M.toList $
+          M.map sumAndPercents mvsInfo
+      io $ mapM_ print res
