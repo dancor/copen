@@ -50,8 +50,8 @@ options = [
   ]
 
 onFiles :: (MonadIO m) => [[Char]] -> ([Char] -> String -> m a) -> m ()
-onFiles files f = mapM_
-  (\ file -> f file =<< io (if file == "-" then getContents else readFile file))
+onFiles files f = mapM_ (\ file -> f file =<< io
+  (if file == "-" then getContents else readFile file))
   files
 
 -- this is a hack for This Week in Chess's .pgn files
@@ -99,7 +99,8 @@ getPosMovesIteratee a b accum =
   result' $ ((decode $ BS.pack a, toEnum b):accum)
 
 getPosMoves board = doQuery (sqlbind
-  "SELECT copen.move, games.result FROM copen, games WHERE copen.game_number = games.game_number AND copen.position = ?"
+  "SELECT copen.move, games.result FROM copen, games WHERE \
+  \copen.game_number = games.game_number AND copen.position = ?"
   [bindP . BS.unpack $ encode board])
   getPosMovesIteratee []
 
